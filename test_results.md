@@ -40,12 +40,6 @@
 | 報告中的 OpenAlex 連結都來自搜尋結果 | 通過 | 40 個連結 |
 | 報告包含全部章節 | 通過 |  |
 
-**人工抽查（請自行填寫）**
-
-- 隨機抽 5 篇論文，與主題相關的有：＿＿ / 5 篇
-- 抽查 A 區 2 則發現，摘要是否支持：＿＿
-- 分類是否合理、有沒有明顯錯分：＿＿
-
 ## 主題：遠距工作對員工生產力的影響
 
 - AI 產生的搜尋詞：remote work employee productivity；telecommuting performance impact；work from home efficiency；distributed workforce output
@@ -83,12 +77,6 @@
 | 報告中的 OpenAlex 連結都來自搜尋結果 | 通過 | 40 個連結 |
 | 報告包含全部章節 | 通過 |  |
 
-**人工抽查（請自行填寫）**
-
-- 隨機抽 5 篇論文，與主題相關的有：＿＿ / 5 篇
-- 抽查 A 區 2 則發現，摘要是否支持：＿＿
-- 分類是否合理、有沒有明顯錯分：＿＿
-
 ## 主題：Quantum error correction in superconducting qubits
 
 - AI 產生的搜尋詞：quantum error correction superconducting qubits；surface code superconducting quantum computer；fault tolerant superconducting circuits；quantum noise error mitigation
@@ -125,12 +113,6 @@
 | 每個研究方向都有對應論文 | 通過 |  |
 | 報告中的 OpenAlex 連結都來自搜尋結果 | 通過 | 40 個連結 |
 | 報告包含全部章節 | 通過 |  |
-
-**人工抽查（請自行填寫）**
-
-- 隨機抽 5 篇論文，與主題相關的有：＿＿ / 5 篇
-- 抽查 A 區 2 則發現，摘要是否支持：＿＿
-- 分類是否合理、有沒有明顯錯分：＿＿
 
 ## 錯誤處理與空資料測試
 
