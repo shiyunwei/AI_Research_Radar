@@ -1,4 +1,7 @@
 # test_gemini.py  （暫時的測試檔，確認 Gemini 能連線）
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from google import genai
 from config import GEMINI_API_KEY, GEMINI_MODEL, get_missing_keys
 

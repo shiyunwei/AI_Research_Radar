@@ -1,4 +1,7 @@
 # test_openalex.py  （暫時的測試檔，確認 OpenAlex 能連線）
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import requests
 from config import OPENALEX_API_KEY, OPENALEX_BASE_URL, get_missing_keys
 

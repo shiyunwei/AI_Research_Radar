@@ -1,4 +1,7 @@
 # test_phase5.py  （暫時的測試檔）
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from services.openalex_service import search_papers, fetch_year_counts, OpenAlexError
 from services.gemini_service import classify_papers, interpret_trends, GeminiError
 from utils.data_processor import (

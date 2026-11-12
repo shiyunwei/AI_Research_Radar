@@ -1,4 +1,7 @@
 # test_phase8.py  （系統測試：自動檢查資料正確性與錯誤處理，並產生 test_results.md）
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import re
 import time
 from datetime import datetime
@@ -153,7 +156,10 @@ def failure_tests():
     return out
 
 
-def write_log(results, failures, path="test_results.md"):
+DEFAULT_LOG_PATH = str(Path(__file__).resolve().parent / "test_results.md")
+
+
+def write_log(results, failures, path=DEFAULT_LOG_PATH):
     L = [f"# 系統測試紀錄（{datetime.now():%Y-%m-%d %H:%M}）", "",
          f"- 主要模型：{GEMINI_MODEL}｜備用模型：{GEMINI_FALLBACK_MODEL or '無'}｜思考等級：{GEMINI_THINKING_LEVEL or '預設'}",
          f"- 搜尋條件：{YEAR_FROM}–{YEAR_TO} 年，論文數量上限 {MAX_RESULTS}", ""]

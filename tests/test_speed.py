@@ -1,4 +1,7 @@
 # test_speed.py  （暫時的測試檔：比較各模型的回應速度）
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import time
 from google import genai
 from google.genai import types

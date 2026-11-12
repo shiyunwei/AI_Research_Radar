@@ -1,4 +1,7 @@
 # test_phase6.py  （暫時的測試檔）
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import json, os, time
 import pandas as pd
 from services.openalex_service import search_papers
