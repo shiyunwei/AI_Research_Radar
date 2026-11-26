@@ -3,6 +3,7 @@
 import math
 import requests
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 from config import OPENALEX_API_KEY, OPENALEX_BASE_URL
 import re
 
@@ -196,8 +197,14 @@ def search_multi(queries, year_from=None, year_to=None, max_results=50, only_wit
     per_query = max(10, math.ceil(max_results * 1.5 / len(queries)))
     frames, per_query_total = [], {}
 
-    for q in queries:
-        df_q, s_q = search_papers(q, year_from, year_to, per_query, only_with_abstract)
+    # 使用執行緒池平行發送多組搜尋詞，大幅縮短檢索時間
+    def _fetch_one(q):
+        return q, search_papers(q, year_from, year_to, per_query, only_with_abstract)
+
+    with ThreadPoolExecutor(max_workers=min(5, len(queries))) as executor:
+        results = list(executor.map(_fetch_one, queries))
+
+    for q, (df_q, s_q) in results:
         per_query_total[q] = s_q["total_in_openalex"]
         if not df_q.empty:
             df_q = df_q.copy()

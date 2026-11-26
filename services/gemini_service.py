@@ -28,8 +28,8 @@ def _get_client():
     return genai.Client(api_key=GEMINI_API_KEY)
 
 
-RETRY_CODES = (500, 503, 504)  # 伺服器暫時性錯誤，值得重試
-MAX_ATTEMPTS = 2               # 每個模型最多嘗試次數（SDK 本身也會做內部重試）
+RETRY_CODES = (500, 502, 503, 504)  # 伺服器暫時性錯誤，值得重試
+MAX_ATTEMPTS = 3                    # 每個模型最多嘗試次數（含智慧退避等待）
 
 LAST_CALL_INFO = {}  # 最近一次呼叫的診斷資訊（模型、秒數、token 數）
 
@@ -50,7 +50,7 @@ def _build_config(schema):
 
 
 def _generate_with_retry(client, model, prompt, schema):
-    """用指定模型呼叫 Gemini，遇到伺服器忙碌會重試；仍失敗則丟出 GeminiBusyError。"""
+    """用指定模型呼叫 Gemini，遇到伺服器忙碌或瞬間限流會智慧重試；仍失敗則丟出 GeminiBusyError。"""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             return client.models.generate_content(
@@ -61,11 +61,16 @@ def _generate_with_retry(client, model, prompt, schema):
             msg = str(getattr(e, "message", e))[:200]
             if code in RETRY_CODES:
                 if attempt < MAX_ATTEMPTS:
-                    time.sleep(5 * attempt)
+                    # 指數退避：3 秒、6 秒，給予伺服器足夠冷卻時間
+                    time.sleep(3 * (2 ** (attempt - 1)))
                     continue
                 raise GeminiBusyError(f"模型 {model} 伺服器忙碌（{code}）。")
             if code == 429:
-                raise GeminiBusyError(f"模型 {model} 使用額度已達上限（429）。", quota=True)
+                # 瞬間速率限制（RPM/TPM）先暫停等待，嘗試重試；若最後仍是 429 則標註配額已滿
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(4 * attempt)
+                    continue
+                raise GeminiBusyError(f"模型 {model} 使用額度或速率已達上限（429）。", quota=True)
             if code == 404:
                 raise GeminiError(f"找不到模型 {model}，請確認 .env 的模型名稱。")
             if code in (401, 403):
@@ -503,3 +508,43 @@ def explore_research_directions(df, categories, topic):
              "downgraded_to_inference": counter["downgraded"]}
     return {"supported": supported, "inferences": inferences,
             "open_questions": open_qs, "directions": directions}, stats
+
+
+# ===================== Phase 2 功能擴充：學期研究計畫與選取文字提問 =====================
+class ResearchPlan(BaseModel):
+    title: str                          # 專題/計畫建議名稱
+    problem_statement: str              # 背景與問題意識說明（2~3 句）
+    hypotheses: list[str]               # 2~3 個核心研究假說或細化研究問題
+    methodology: list[str]              # 具體實施步驟與研究方法
+    data_collection: str                # 資料蒐集或樣本來源規劃
+    challenges_and_solutions: list[str] # 2~3 個可能遇到的困難與因應策略
+    semester_schedule: list[str]        # 16 週進度規劃
+
+
+def generate_research_plan(direction_dict, topic, related_papers_titles=None):
+    """根據選定的研究方向，由 Gemini 生成一份適合大學生執行的學期研究計畫草案。"""
+    paper_context = ""
+    if related_papers_titles:
+        paper_context = "相關參考文獻：\n" + "\n".join(f"- {t}" for t in related_papers_titles[:5])
+
+    prompt = f"""你是大學專題與學術研究顧問。使用者正在探索研究主題：「{topic}」。
+使用者選定了以下由系統提出的研究方向，希望能進一步拓展為一份具體的學期專題研究計畫：
+
+【研究方向名稱】{direction_dict.get('name', '')}
+【方向說明】{direction_dict.get('description', '')}
+【建議研究方法】{'、'.join(direction_dict.get('methods', []))}
+【可行性評估】{direction_dict.get('feasibility', '')}
+{paper_context}
+
+請針對此方向，以繁體中文規劃一份結構完整、切實可行（適合大學生在一學期 16 週內完成）的研究計畫草案：
+1. title：具體且專業的專案研究題目。
+2. problem_statement：研究背景與問題意識（2 到 3 句話，清楚說明此題目為何值得做）。
+3. hypotheses：列出 2 到 3 個核心假說或細部研究問題。
+4. methodology：列出 3 到 4 點具體的研究實施步驟或設計細節（如問卷構面、訪談對象選擇、資料分析模型等）。
+5. data_collection：具體的資料蒐集方式或樣本取得管道。
+6. challenges_and_solutions：列出 2 到 3 個可能面臨的限制或困難，並提出應對解法。
+7. semester_schedule：將 16 週以 4 個階段規劃時程進度（W1-W4, W5-W8, W9-W12, W13-W16）。
+
+規則：使用繁體中文，內容務實具體，避免空泛的口號。"""
+
+    return call_gemini_json(prompt, ResearchPlan)

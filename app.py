@@ -5,7 +5,8 @@ import streamlit as st
 from config import get_missing_keys
 from services.gemini_service import (
     expand_keywords, classify_papers, interpret_trends,
-    explore_research_directions, GeminiError,
+    explore_research_directions, generate_research_plan,
+    GeminiError,
 )
 from services.openalex_service import search_multi, fetch_year_counts, OpenAlexError
 from utils.data_processor import (
@@ -14,6 +15,12 @@ from utils.data_processor import (
 )
 from utils.report import build_markdown_report
 from utils.visualization import yearly_bar, category_bar, category_year_chart
+from utils.storage import (
+    save_history, load_history_list, get_history_item, delete_history_item,
+    get_bookmarks, is_paper_bookmarked, toggle_paper_bookmark, remove_paper_bookmark,
+    is_direction_bookmarked, toggle_direction_bookmark, remove_direction_bookmark,
+    export_bookmarks_markdown,
+)
 
 st.set_page_config(page_title="AI Research Radar", page_icon="📡", layout="wide")
 
@@ -269,6 +276,14 @@ def run_analysis():
             st.error(f"{e}\n\n已完成的步驟會保留，按下方「重試」會從中斷處繼續。")
             return False
         status.update(label="分析完成", state="complete", expanded=False)
+        try:
+            save_history(
+                topic, st.session_state.kw, st.session_state.queries,
+                st.session_state.year_from, st.session_state.year_to,
+                st.session_state.stats, a["df"], a
+            )
+        except Exception as e:
+            st.warning(f"儲存歷史紀錄時發生異常：{e}")
     return True
 
 
@@ -339,6 +354,55 @@ def render_item(item, index):
         render_refs(item["paper_ids"], index)
 
 
+# ---------- 彈出視窗：學期專案研究計畫 ----------
+@st.dialog("📋 學期專案研究計畫草案", width="large")
+def show_research_plan_dialog(d, topic, index=None):
+    dir_name = d.get("name", "未命名方向")
+    cache_key = f"plan_{dir_name}"
+    if cache_key not in st.session_state:
+        paper_titles = []
+        if d.get("related_paper_titles"):
+            paper_titles = list(d["related_paper_titles"])
+        elif index and isinstance(index, dict):
+            for oid in d.get("paper_ids", []):
+                if oid in index and isinstance(index[oid], dict) and "title" in index[oid]:
+                    paper_titles.append(index[oid]["title"])
+
+        effective_topic = topic or d.get("topic") or dir_name
+        with st.spinner("AI 正在為此方向量身打造學期研究計畫，請稍候…"):
+            try:
+                plan = generate_research_plan(d, effective_topic, paper_titles)
+                st.session_state[cache_key] = plan
+            except GeminiError as e:
+                st.error(f"生成計畫失敗：{e}")
+                return
+
+    plan = st.session_state[cache_key]
+    st.markdown(f"### 🎯 {plan.title}")
+    st.info(f"**【研究背景與問題意識】**\n\n{plan.problem_statement}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**🔍 核心研究假說 / 細化問題**")
+        for h in plan.hypotheses:
+            st.markdown(f"- {h}")
+    with c2:
+        st.markdown("**📊 資料蒐集與樣本規劃**")
+        st.write(plan.data_collection)
+
+    st.markdown("**🔬 具體研究設計與實施步驟**")
+    for m in plan.methodology:
+        st.markdown(f"- {m}")
+
+    st.markdown("**⚠ 預期困難與因應對策**")
+    for c in plan.challenges_and_solutions:
+        st.markdown(f"- {c}")
+
+    st.markdown("**📅 16 週專題進度規劃**")
+    for s in plan.semester_schedule:
+        st.markdown(f"- {s}")
+
+
 def render_direction(d, index):
     with st.container(border=True):
         st.markdown(f"#### {d['name']}")
@@ -351,6 +415,17 @@ def render_direction(d, index):
         st.markdown("**可行性與限制**：" + d["feasibility"])
         show_flags(d["flags"])
         render_refs(d["paper_ids"], index, "相關論文")
+        c_left, c_right = st.columns([1, 1])
+        with c_left:
+            is_bm = is_direction_bookmarked(d["name"])
+            bm_lbl = "★ 已收藏此方向" if is_bm else "☆ 收藏此方向"
+            if st.button(bm_lbl, key=f"bm_dir_{d['name']}", use_container_width=True):
+                paper_titles = [index[oid]["title"] for oid in d.get("paper_ids", []) if oid in index] if index else []
+                toggle_direction_bookmark(d, st.session_state.topic, related_paper_titles=paper_titles)
+                st.rerun()
+        with c_right:
+            if st.button("🚀 深入這個方向：生成學期研究計畫", key=f"btn_plan_{d['name']}", use_container_width=True):
+                show_research_plan_dialog(d, st.session_state.topic, index)
 
 
 def render_directions_tab(a, index):
@@ -383,6 +458,29 @@ def render_directions_tab(a, index):
 def render_sources_tab(a):
     st.caption("以下是本次分析使用的全部論文，每篇都可以開啟 OpenAlex 或 DOI 連結查證。")
     render_paper_table(a["df"], with_category=True)
+
+    with st.expander("⭐ 快速收藏論文至收藏庫"):
+        st.caption("可從本次分析的所有論文中選取並收藏：")
+        df_papers = a["df"]
+        paper_options = {
+            row["openalex_id"]: f"({row['year']}) {row['title']}"
+            for _, row in df_papers.iterrows()
+        }
+        sel_paper_id = st.selectbox(
+            "選擇要收藏／取消收藏的論文",
+            options=list(paper_options.keys()),
+            format_func=lambda x: paper_options[x],
+            key="quick_bm_select",
+        )
+        if sel_paper_id:
+            is_bm = is_paper_bookmarked(sel_paper_id)
+            btn_lbl = "★ 取消收藏此篇論文" if is_bm else "☆ 收藏此篇論文"
+            if st.button(btn_lbl, key=f"quick_bm_btn_{sel_paper_id}"):
+                row_match = df_papers[df_papers["openalex_id"] == sel_paper_id]
+                if not row_match.empty:
+                    toggle_paper_bookmark(row_match.iloc[0].to_dict())
+                    st.rerun()
+
     with st.expander("AI 輸出驗證紀錄"):
         c, e = a["cls_stats"], a["explore_stats"]
         st.markdown(
@@ -391,6 +489,7 @@ def render_sources_tab(a):
             f"- 研究方向：丟棄不存在的論文代號 {e['invalid_ids_dropped']} 個，"
             f"「已支持」降級為推論 {e['downgraded_to_inference']} 則。")
 
+
 def render_reading_tab(reading):
     st.caption("以下由程式依 OpenAlex 的引用次數與出版年份挑選，不經過 AI。"
                "引用次數會隨時間累積，近期論文引用較少不代表品質較低。")
@@ -398,10 +497,172 @@ def render_reading_tab(reading):
         st.subheader(title)
         for p in reading[key]:
             t = str(p["title"]).replace("[", "(").replace("]", ")")
-            line = f"- ({p['year']}) [{t}]({p['openalex_url']})，引用 {p['cited_by_count']} 次"
-            if p["is_oa"] and isinstance(p["oa_url"], str):
-                line += f"，[開放取用全文]({p['oa_url']})"
-            st.markdown(line)
+            col_info, col_act = st.columns([5, 1])
+            with col_info:
+                line = f"- ({p['year']}) [{t}]({p['openalex_url']})，引用 {p['cited_by_count']} 次"
+                if p["is_oa"] and isinstance(p.get("oa_url"), str):
+                    line += f"，[開放取用全文]({p['oa_url']})"
+                st.markdown(line)
+            with col_act:
+                oid = p.get("openalex_id", "")
+                is_bm = is_paper_bookmarked(oid)
+                lbl = "★ 已收藏" if is_bm else "☆ 收藏"
+                if st.button(lbl, key=f"bm_read_{key}_{oid}", use_container_width=True):
+                    toggle_paper_bookmark(p)
+                    st.rerun()
+
+
+def render_bookmarks_tab(index=None):
+    st.subheader("⭐ 個人研究主題與論文收藏庫")
+    b = get_bookmarks()
+    papers = b.get("papers", [])
+    directions = b.get("directions", [])
+
+    m1, m2 = st.columns(2)
+    m1.metric("已收藏論文數", len(papers))
+    m2.metric("已收藏研究方向", len(directions))
+
+    if papers or directions:
+        st.download_button(
+            "📥 下載個人收藏清單 (Markdown)",
+            data=export_bookmarks_markdown(),
+            file_name=f"research_bookmarks_{datetime.now():%Y%m%d_%H%M}.md",
+            mime="text/markdown",
+            key="dl_bookmarks_tab_btn",
+        )
+
+    st.markdown("---")
+    st.markdown("### 📚 已收藏之學術論文")
+    if not papers:
+        st.caption("尚未收藏任何論文。可在「推薦延伸閱讀」或「論文清單」中點擊收藏。")
+    else:
+        for p in papers:
+            with st.container(border=True):
+                col_info, col_del = st.columns([6, 1])
+                with col_info:
+                    t = str(p.get("title", "")).replace("[", "(").replace("]", ")")
+                    st.markdown(f"**({p.get('year')}) [{t}]({p.get('openalex_url')})**")
+                    oa_tag = " [開放全文]" if p.get("is_oa") else ""
+                    st.caption(f"作者：{p.get('authors', '未知')} ｜ 被引次數：{p.get('cited_by_count', 0)} 次{oa_tag} ｜ 收藏於 {p.get('saved_at', '')}")
+                with col_del:
+                    if st.button("❌ 移除", key=f"del_bm_paper_{p.get('openalex_id')}", use_container_width=True):
+                        remove_paper_bookmark(p.get("openalex_id"))
+                        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 🎯 已收藏之研究構想與方向")
+    if not directions:
+        st.caption("尚未收藏任何研究方向。可在「研究問題與方向」中點選收藏。")
+    else:
+        for d in directions:
+            with st.container(border=True):
+                st.markdown(f"#### {d.get('name')}")
+                if d.get("topic"):
+                    st.caption(f"來源主題：{d.get('topic')} ｜ 收藏於 {d.get('saved_at', '')}")
+                st.write(d.get("description", ""))
+                if d.get("methods"):
+                    st.markdown("**建議研究方法**：" + "、".join(d.get("methods", [])))
+                if d.get("feasibility"):
+                    st.markdown("**可行性與限制**：" + d.get("feasibility", ""))
+
+                c_del, c_plan = st.columns([1, 2])
+                with c_del:
+                    if st.button("❌ 移除收藏", key=f"del_bm_dir_{d.get('name')}", use_container_width=True):
+                        remove_direction_bookmark(d.get("name"))
+                        st.rerun()
+                with c_plan:
+                    if st.button("🚀 深入這個方向：生成學期研究計畫", key=f"btn_bm_plan_{d.get('name')}", use_container_width=True):
+                        show_research_plan_dialog(d, d.get("topic", st.session_state.topic), index or {})
+
+
+def render_bookmarks_page():
+    st.title("⭐ 個人學術收藏專頁")
+    if st.button("← 回到上一頁"):
+        if st.session_state.df is not None and st.session_state.analysis:
+            go("analysis")
+        elif st.session_state.df is not None:
+            go("results")
+        else:
+            go("home")
+    render_bookmarks_tab()
+
+
+def render_sidebar():
+    with st.sidebar:
+        st.title("📡 AI Research Radar")
+        st.caption("學術研究雷達助手")
+        st.divider()
+
+        # 📜 歷史搜尋紀錄
+        st.subheader("📜 歷史研究紀錄")
+        history_items = load_history_list()
+        if history_items:
+            options = {item["id"]: item["label"] for item in history_items}
+            if "sidebar_history_select" in st.session_state and st.session_state.sidebar_history_select not in options:
+                del st.session_state["sidebar_history_select"]
+            selected_id = st.selectbox(
+                "選擇歷史專案",
+                options=list(options.keys()),
+                format_func=lambda x: options[x],
+                key="sidebar_history_select",
+            )
+            c_load, c_del = st.columns([1, 1])
+            with c_load:
+                if st.button("📂 載入紀錄", use_container_width=True):
+                    data = get_history_item(selected_id)
+                    if data:
+                        st.session_state.update(
+                            topic=data["topic"],
+                            kw=data["kw"],
+                            queries=data["queries"],
+                            year_from=data["year_from"],
+                            year_to=data["year_to"],
+                            stats=data["stats"],
+                            df=data["df"],
+                            analysis=data["analysis"],
+                            stage="analysis" if data["analysis"] else "results",
+                        )
+                        st.success(f"已載入：{data['topic']}")
+                        st.rerun()
+            with c_del:
+                if st.button("🗑️ 刪除", use_container_width=True):
+                    delete_history_item(selected_id)
+                    if "sidebar_history_select" in st.session_state:
+                        del st.session_state["sidebar_history_select"]
+                    st.rerun()
+        else:
+            st.caption("目前尚無搜尋歷史。完成一次研究分析後將自動儲存。")
+
+        st.divider()
+
+        # ⭐ 我的收藏庫概覽
+        st.subheader("⭐ 我的收藏庫")
+        b = get_bookmarks()
+        n_papers = len(b.get("papers", []))
+        n_dirs = len(b.get("directions", []))
+        st.write(f"- 📚 已收藏論文：**{n_papers}** 篇")
+        st.write(f"- 🎯 已收藏方向：**{n_dirs}** 個")
+
+        if st.button("🌟 開啟收藏庫專頁", use_container_width=True, key="sidebar_goto_bookmarks"):
+            st.session_state.stage = "bookmarks"
+            st.rerun()
+
+        if n_papers > 0 or n_dirs > 0:
+            st.download_button(
+                "📥 下載收藏清單 (.md)",
+                data=export_bookmarks_markdown(),
+                file_name=f"academic_bookmarks_{datetime.now():%Y%m%d}.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key="sidebar_dl_bookmarks",
+            )
+
+        st.divider()
+        if st.session_state.stage != "home":
+            if st.button("🏠 回到探索首頁", use_container_width=True, key="sidebar_goto_home"):
+                st.session_state.stage = "home"
+                st.rerun()
+
 
 def render_analysis():
     st.title("③ AI 研究分析")
@@ -432,8 +693,8 @@ def render_analysis():
                        file_name=f"research_radar_{datetime.now():%Y%m%d_%H%M}.md",
                        mime="text/markdown")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["研究主題分類", "研究趨勢", "研究問題與方向", "推薦延伸閱讀", "論文清單"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["研究主題分類", "研究趨勢", "研究問題與方向", "推薦延伸閱讀", "論文清單", "⭐ 我的收藏庫"])
     with tab1:
         render_categories_tab(a, index)
     with tab2:
@@ -444,6 +705,8 @@ def render_analysis():
         render_reading_tab(reading)
     with tab5:
         render_sources_tab(a)
+    with tab6:
+        render_bookmarks_tab(index)
 
     st.divider()
     st.caption("本頁的分類、推論與研究構想由生成式 AI 產生，可能有誤；論文資料來自 OpenAlex。"
@@ -451,6 +714,8 @@ def render_analysis():
 
 
 # ---------- 主流程 ----------
+render_sidebar()
+
 missing = get_missing_keys()
 if missing:
     st.error("缺少設定：" + "、".join(missing) + "。請檢查 .env 檔案。")
@@ -463,5 +728,7 @@ elif stage == "results" and st.session_state.df is not None:
     render_results()
 elif stage == "analysis" and st.session_state.df is not None:
     render_analysis()
+elif stage == "bookmarks":
+    render_bookmarks_page()
 else:
     render_home()
