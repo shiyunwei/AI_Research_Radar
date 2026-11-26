@@ -14,6 +14,7 @@ from utils.data_processor import (
     build_trend_facts, make_fact_statements, recommend_reading,
 )
 from utils.report import build_markdown_report
+from utils.pdf_generator import build_pdf_report
 from utils.visualization import yearly_bar, category_bar, category_year_chart
 from utils.storage import (
     save_history, load_history_list, get_history_item, delete_history_item,
@@ -91,6 +92,9 @@ def reset_analysis():
     cached_classify.clear()
     cached_trends.clear()
     cached_explore.clear()
+    for k in list(st.session_state.keys()):
+        if k.startswith("pdf_") or k.startswith("plan_"):
+            del st.session_state[k]
 
 
 def bullets(items):
@@ -685,13 +689,41 @@ def render_analysis():
         st.session_state.year_from, st.session_state.year_to,
         st.session_state.stats, a, reading)
 
-    b1, b2, b3, b4 = st.columns([1, 1, 1, 3])
-    b1.button("← 回到搜尋結果", on_click=nav, args=("results",))
-    b2.button("重新分析", on_click=reset_analysis, help="重新呼叫 AI，分類與內容可能略有不同")
-    b3.button("重新開始", on_click=nav, args=("home",))
-    b4.download_button("下載 Markdown 報告", data=report,
-                       file_name=f"research_radar_{datetime.now():%Y%m%d_%H%M}.md",
-                       mime="text/markdown")
+    b1, b2, b3, b4 = st.columns([1, 1, 1, 2])
+    b1.button("← 回到搜尋結果", on_click=nav, args=("results",), use_container_width=True)
+    b2.button("重新分析", on_click=reset_analysis, help="重新呼叫 AI，分類與內容可能略有不同", use_container_width=True)
+    b3.button("重新開始", on_click=nav, args=("home",), use_container_width=True)
+    with b4:
+        with st.popover("📥 下載分析報告", use_container_width=True):
+            st.markdown("##### 選擇報告匯出格式")
+            st.caption("請選擇您希望下載的檔案格式：")
+
+            st.download_button(
+                "📝 下載 Markdown 報告 (.md)",
+                data=report,
+                file_name=f"research_radar_{datetime.now():%Y%m%d_%H%M}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+            st.caption("適合匯入 Notion、Obsidian 或進行筆記二次編輯。")
+
+            st.divider()
+
+            pdf_key = f"pdf_{st.session_state.topic}_{len(a['df'])}"
+            if pdf_key not in st.session_state:
+                st.session_state[pdf_key] = build_pdf_report(
+                    st.session_state.topic, st.session_state.kw, st.session_state.queries,
+                    st.session_state.year_from, st.session_state.year_to,
+                    st.session_state.stats, a, reading
+                )
+            st.download_button(
+                "📄 下載 PDF 報告 (.pdf)",
+                data=st.session_state[pdf_key],
+                file_name=f"research_radar_{datetime.now():%Y%m%d_%H%M}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            st.caption("專業學術排版、分類卡片、趨勢表與可點擊論文超連結。")
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         ["研究主題分類", "研究趨勢", "研究問題與方向", "推薦延伸閱讀", "論文清單", "⭐ 我的收藏庫"])
